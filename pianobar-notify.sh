@@ -28,15 +28,16 @@
 # pianobar config file.
 #
 # Also check if this matches you config folder
-fold="${XDG_CONFIG_HOME:-$HOME/.config}/pianobar"
-
+confdir="${XDG_CONFIG_HOME:-$HOME/.config}/pianobar"
+# Temporary folder
+fold="/tmp/pianobar"
 # You should also place the control-pianobar.sh script in the
 # config folder (or modify the following variable accordingly).
-controlpianobar="$fold/control-pianobar.sh"
+controlpianobar="$confdir/control-pianobar.sh"
 
 # Also place the pandora.jpg file in the same folder, or modify de
 # following variable.
-blankicon="$fold/pandora.jpg"
+blankicon="$confdir/pandora.jpg"
 
 # Edit this to customize the format songs are displayed in
 # (e.g. "$title - $artist" instead of "$artist - $title")
@@ -54,14 +55,12 @@ downall="FALSE"
 downliked="FALSE"
 
 # Some of the following was copied from eventcmd.sh
-if [[ "$fold" == "/pianobar" ]]; then
-    fold="$HOME/.config/pianobar"
-    blankicon="$fold""$blankicon"
+if [[ "$confdir" == "/pianobar" ]]; then
+    confdir="$HOME/.config/pianobar"
+    blankicon="$confdir/pandora.jpg"
 fi
 notify="notify-send --hint=int:transient:1"
-zenity="zenity"
 logf="$fold/log"
-ctlf="$fold/ctl"
 an="$fold/artname"
 np="$fold/nowplaying"
 ds="$fold/durationstation"
@@ -72,33 +71,33 @@ ip="$fold/isplaying"
 ine="$fold/ignextevent"
 dn="$fold/downloadname"
 dd="$fold/downloaddir"
-st="$fold/state"
+st="$confdir/state"
 
-while read L; do
-    k="`echo "$L" | cut -d '=' -f 1`"
-    v="`echo "$L" | cut -d '=' -f 2`"
+while read -r L; do
+    k="$(echo "$L" | cut -d '=' -f 1)"
+    v="$(echo "$L" | cut -d '=' -f 2)"
     export "$k=$v"
 done < <(grep -e '^\(title\|artist\|album\|stationName\|songStationName\|pRet\|pRetStr\|wRet\|wRetStr\|songDuration\|songPlayed\|rating\|coverArt\|stationCount\|station[0-9]\+\)=' /dev/stdin) # don't overwrite $1...
 
 [[ "$rating" == 1 ]] && like="(like)"
 playpause="||"
 
-[[ "$(cat "$ip")" == 1 ]] && playpause="|>"
-icon=`echo "$artist-$album.jpg" | sed 's/\//_/g'`
-songPlayed="$(($songDuration-$songPlayed))"
-dursec="$(($(($songDuration-$(($songDuration/60000*60000))))/1000))"
-plasec="$(($(($songPlayed-$(($songPlayed/60000*60000))))/1000))"
+[[ -f $ip && "$(cat "$ip")" == 1 ]] && playpause="|>"
+icon=$(echo "$artist-$album.jpg" | sed 's/\//_/g')
+songPlayed="$((songDuration-songPlayed))"
+dursec="$((songDuration-$((songDuration/60*60))))"
+plasec="$((songPlayed-$((songPlayed/60*60))))"
 
 if [[ $dursec -lt 10 ]]; then
-    duration="$(($songDuration/60000)):"0$dursec
+    duration="$((songDuration/60)):"0$dursec
 else
-    duration="$(($songDuration/60000)):"$dursec
+    duration="$((songDuration/60)):"$dursec
 fi
-
+sed 's/\//_/g'
 if [[ $plasec -lt 10 ]]; then
-    played="$(($songPlayed/60000)):"0$plasec
+    played="$((songPlayed/60)):"0$plasec
 else
-    played="$(($songPlayed/60000)):"$plasec
+    played="$((songPlayed/60)):"$plasec
 fi
 
 if [[ $songDuration -gt 10 ]]; then
@@ -123,7 +122,7 @@ Station: $stationName - $songStationName" > "$ds"
 	fi
 fi
 echo "$(songname) $like" > "$np"
-echo $(filename) > "$dn"
+filename > "$dn"
 if [[ -z $songStationName ]]; then
 	echo "$stationName" > "$dd"
 else
@@ -133,21 +132,21 @@ fi
 case "$1" in
     songstart)
 	   echo "1" > "$ip"
-	   cd "$fold/albumart"
+	   cd "$confdir/albumart" || return
 
 	   if [[ ! -e "$icon" ]]; then
 
 		  if [[ -n "$coverArt" ]]; then
 			 wget -q -O "$icon" "$coverArt"
-			 echo "$fold/albumart/$icon" > $an
+			 echo "$confdir/albumart/$icon" > $an
 		  else
 			 echo "$blankicon" > $an
 		  fi
 	   else
-		  echo "$fold/albumart/$icon" > $an
+		  echo "$confdir/albumart/$icon" > $an
 	   fi
 
-	   $notify -t 7000 -i "`cat $an`" "`cat $np`" "`cat $ds`"
+	   $notify -t 7000 -i "$(cat $an)" "$(cat $np)" "$(cat $ds)"
 	   echo "" > "$logf"
 
 	   if [[ -e "$su" ]]; then
@@ -162,14 +161,14 @@ case "$1" in
     songexplain)
 	   cp "$ds" "$dse"
 	   tail -1 "$logf" | grep --text "(i) We're" | sed 's/.*(i).*features/*/' | sed 's/,/\n*/g' | sed 's/and \([^,]*\)\./\n* \1/' | sed 's/\* many other similarities.*/* and more./' >> "$dse"
-	   $notify -t 15000 -i "`cat $an`" "`cat $np`" "`cat $dse`";;
+	   $notify -t 15000 -i "$(cat $an)" "$(cat $np)" "$(cat $dse)";;
     
     songlove)
 	   if [[ -e "$ine" ]]; then
 		  $notify -t 2500 "Song Liked" ""
 		  rm -f "$ine"
 	   else
-		  $notify -t 2500 -i "`cat $an`" "Song Liked" "`echo $(songname)`"
+		  $notify -t 2500 -i "$(cat $an)" "Song Liked" "$(songname)"
 	   fi
 		 if [[ "$downliked" == "TRUE" ]]; then $controlpianobar d 3 &
 		 fi;;
@@ -179,7 +178,7 @@ case "$1" in
 		  $notify -t 2500 "Song Banned" ""
 		  rm -f "$ine"
 	   else
-		  $notify -t 2500 -i "`cat $an`" "Song Banned" "`echo $(songname)`"
+		  $notify -t 2500 -i "$(cat $an)" "Song Banned" "$(songname)"
 	   fi;;
     
     songshelf)
@@ -187,7 +186,7 @@ case "$1" in
 		  $notify -t 2500 "Song Put Away" ""
 		  rm -f "$ine"
 	   else
-		  $notify -t 2500 -i "`cat $an`" "Song Put Away" "`echo $(songname)`"
+		  $notify -t 2500 -i "$(cat $an)" "Song Put Away" "$(songname)"
 	   fi;;
     
     stationfetchplaylist)
@@ -196,12 +195,12 @@ case "$1" in
     usergetstations)
 	   if [[ $stationCount -gt 0 ]]; then
 		  rm -f "$stl"
-		  for stnum in $(seq 0 $(($stationCount-1))); do
+		  for stnum in $(seq 0 $((stationCount-1))); do
 			 echo "$stnum) "$(eval "echo \$station$stnum") >> "$stl"
 		  done
 	   fi
-     if [[ ! `cat "$st" | grep "auto" | cut -d "=" -f 2 | wc -m` -gt 2 ]]; then
-	    echo "$($zenity --entry --title="Switch Station" --text="$(cat "$stl")")" > "$ctlf"
+     if [[ ! $(grep "auto" "$st" 2> /dev/null | cut -d "=" -f 2 | wc -m) -gt 2 ]]; then
+	    $controlpianobar csl 1 &
      fi;;
     
     userlogin)

@@ -30,19 +30,25 @@
 #
 # These variables should match YOUR configs
   # Your config folder
-  fold="${XDG_CONFIG_HOME:-$HOME/.config}/pianobar"
+  confdir="${XDG_CONFIG_HOME:-$HOME/.config}/pianobar"
+  # Temporary folder
+  fold="/tmp/pianobar"
+  # Folder for downloaded songs
+  songdir="$confdir/songs/"
   # The pianobar executable
   pianobar="pianobar"
-  # A blank icon to show when no albumart is found. I prefer to use
-  # the actual pandora icon for this, which you can easily find and
-  # download yourself. I don't include it here for copyright concerns.
-  blankicon="$fold/pandora.jpg"
   
 # You probably shouldn't mess with these (or anything else)
-if [[ "$fold" == "/pianobar" ]]; then
-	fold="$HOME/.config/pianobar"
-  blankicon="$fold""$blankicon"
+if [[ "$confdir" == "/pianobar" ]]; then
+	confdir="$HOME/.config/pianobar"
+    songdir="$confdir/songs/"
 fi
+
+# Create temp dir if it doesn't exist
+if [ ! -d "$fold" ]; then
+    mkdir -p "$fold"
+fi
+
 notify="notify-send --hint=int:transient:1"
 zenity="zenity"
 logf="$fold/log"
@@ -59,79 +65,114 @@ du="$fold/downloadurl"
 
 [[ -n "$2" ]] && sleep "$2"
 
+currentstation(){
+	local stat
+	local curnum
+	stat="$(grep --text "^Station: " "$ds" | sed 's/Station: //')"
+	curnum="$(sed -n "/^[0-9]\+)\s$stat$/=" $stl)"
+	[[ -z "${curnum// }" ]] && curnum="$(sed -n "/^[0-9]\+)\s${stat% -*}$/=" $stl)"
+	echo "$((curnum-1))"
+}
+
+stationlistprep(){
+	local stcnt
+	local menucnt
+	stcnt=$(wc -l < "$stl")
+	if [[ "$stcnt" -gt 5 ]]; then menucnt=5; else menucnt=$((stcnt*2-1)); fi
+	cat $stl $stl $stl | sed "s/^$1) \(.*\)/-->\1/; s/^[0-9]\+) \(.*\)/* \1/; 1,$((stcnt+newnum-(menucnt/2)))d; $((stcnt+newnum+(menucnt/2+1)))q"
+}
+
+switchstation(){
+	if [[ -n "$1" ]]; then
+		local newstt
+		newstt=$(stationlistprep "$1")
+		echo "s$1" > "$ctlf"
+		$notify -t 2000 "Switching station" "$newstt"
+	fi
+};
+
+choosestation(){
+	if [[ -n "$1" ]]; then
+		local newstt
+		newstt=$(stationlistprep "$1")
+		echo "$1" > "$ctlf"
+		$notify -t 2000 "Station selected" "$newstt"
+	fi
+}
+
 echo "" > "$logf"
 case $1 in
 
 p|pause|play)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "p" > "$ctlf"
-		if [[ "$(cat $ip)" == 1 ]]; then
+		if [[ "$(cat $ip 2> /dev/null)" == "1" ]]; then
 			echo "0" > "$ip"
-			$notify -t 2500 -i "`cat $an`" "Song Paused" "`cat $fold/nowplaying`"
+			$notify -t 2500 -i "$(cat $an)" "Song Paused" "$(cat $fold/nowplaying)"
 		else
 			echo "1" > "$ip"
-			$notify -t 2500 -i "`cat $an`" "Song Playing" "`cat $fold/nowplaying`"
+			$notify -t 2500 -i "$(cat $an)" "Song Playing" "$(cat $fold/nowplaying)"
 		fi
 	else
-		mkdir -p "$fold/albumart"
-		rm "$logf" 2> /dev/null
-		rm "$ctlf" 2> /dev/null
+		mkdir -p "$confdir/albumart"
+		rm "$logf" "$ctlf" "$ip" 2> /dev/null
 		mkfifo "$ctlf"
 		$notify -t 2500 "Starting Pianobar" "Logging in..."
 		"$pianobar" | tee "$logf"
 	fi;;
     
 download|d)
-	if [[ -n `pidof pianobar` ]]; then	
+	if [[ -n $(pidof pianobar) ]]; then	
 		echo -n "$" > "$ctlf"
-		tac "$logf" | grep -am1 audioUrl | sed '{ s/^.*audioUrl:\t//; }' | cat > "$du"
-		mkdir -p "$fold/songs/`cat $dd`"
-		cd "$fold/songs/`cat $dd`"
-		if [[ -z `cat "$du" | grep mp3` ]]; then ext="m4a"
-		else ext="mp3"
-		fi
+		tac "$logf" | grep -am1 audioUrl | sed '{ s/^.*audioUrl:\t//; }' > "$du"
+		mkdir -p "$songdir/$(cat $dd)"
+		cd "$songdir/$(cat $dd)" || return
+		if ! grep -q mp3 "$du"; then ext="m4a"; else ext="mp3"; fi
 		
-		minsize=500000 # minimum size in bytes, 500k
 		basefilename="$(cat $dn).$ext"
-		filename="$(readlink -f .)/$basefilename"
-		filesize=$(wc -c <"$filename")
-		filesize_mb=$(printf "%.2f\n" $(bc -l <<< "$filesize/1000000"))
-		if [ $minsize -ge $filesize ]; then
-			$notify -t 3000 "Redownloading..." "Last attempt for $basefilename failed, retrying"
-			rm $filename 2> /dev/null
+		
+		if [[ -e "$basefilename" ]]; then
+			minsize=500000 # minimum size in bytes, 500k
+			filename="$(readlink -f .)/$basefilename"
+			filesize=$(wc -c <"$filename")
+			filesize_mb=$(LC_NUMERIC=C printf "%.2f\n" $(bc -l <<< "$filesize/1000000"))
+			if [ $minsize -ge "$filesize" ]; then
+				$notify -t 3000 "Redownloading..." "Last attempt for $basefilename failed, retrying"
+				rm "$filename" 2> /dev/null
+			fi
 		fi
 
-		if [[ ! -e "`cat $dn`.$ext" ]]; then
-			$notify -t 4000 "Downloading..." "'$basefilename' to `cat $dd`"
-			wget -q -O "`cat $dn`.$ext" "`cat $du`" &
+		if [[ ! -e "$basefilename" ]]; then
+			$notify -t 4000 "Downloading..." "'$basefilename' to $(cat $dd)"
+			wget -q -O "$basefilename" "$(cat $du)" &
 		else
-			$notify -t 2000 "$basefilename" "Already exists in `cat $dd` ($filesize_mb MB)"
+			$notify -t 2000 "$basefilename" "Already exists in $(cat $dd) ($filesize_mb MB)"
 		fi
 	fi;;
 
 love|l|+)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "+" > "$ctlf"
 	fi;;
     
-ban|b|-|hate)
-	if [[ -n `pidof pianobar` ]]; then
+ban|b|-|hate)ip
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "-" > "$ctlf"
 	fi;;
     
 next|n)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "n" > "$ctlf"
 	fi;;
 
 tired|t)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "t" > "$ctlf"
 		$notify -t 2000 "Tired" "We won't play this song for at least a month."
 	fi;;
     
 stop|quit|q)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		$notify -t 1000 "Quitting Pianobar"
 		echo -n "q" > "$ctlf"
 		echo "0" > "$ip"
@@ -148,65 +189,63 @@ stop|quit|q)
 	fi;;
     
 explain|e)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "e" > "$ctlf"
 	fi;;
     
 playing|current|c)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		sleep 1
 		time="$(grep "#" "$logf" --text | tail -1 | sed 's/.*# \+-\([0-9:]\+\)\/\([0-9:]\+\)/\\\\-\1\\\/\2/')"
-		$notify -t 5000 -i "`cat $an`" "$(cat "$np")" "$(sed "1 s/.*/$time/" "$ds")"
+		$notify -t 5000 -i "$(cat $an)" "$(cat "$np")" "$(sed "1 s/.*/$time/" "$ds")"
 	fi;;
     
 nextstation|ns)
-	if [[ -n `pidof pianobar` ]]; then
-		stat="$(grep --text "^Station: " "$ds" | sed 's/Station: //')"
-		newnum="$((`grep --text "$stat" "$stl" | sed 's/\([0-9]\+\)).*/\1/'`+1))"
-		newstt="$(sed "s/^$newnum) \(.*\)/-->\1/" "$stl" | sed 's/^[0-9]\+) \(.*\)/* \1/')"
-		if [[ -z "$(grep "^-->" "$newstt")" ]]; then
-			newnum=0
-			newstt="$(sed "s/^$newnum) \(.*\)/-->\1/" "$stl" | sed 's/^[0-9]\+) \(.*\)/* \1/')"
+	if [[ -n $(pidof pianobar) ]]; then
+		stcnt=$(wc -l < "$stl")
+		if [[ "$stcnt" -ge 2 ]]; then
+			curnum=$(currentstation)
+			[[ "$curnum" -lt 0 ]] && exit
+			[[ "$curnum" -ge "$stcnt" ]] && newnum=0 || newnum=$((curnum+1))
+			switchstation "$newnum"
 		fi
-		echo "s$newnum" > "$ctlf"
-		$notify -t 2000 "Switching station" "$newstt"
 	fi;;
     
 prevstation|ps)
-	if [[ -n `pidof pianobar` ]]; then
-		stat="$(grep --text "^Station: " "$ds" | sed 's/Station: //')"
-		newnum="$((`grep --text "$stat" "$stl" | sed 's/\([0-9]\+\)).*/\1/'`-1))"
-		[[ "$newnum" -lt 0 ]] && newnum=$(($(wc -l < "$stl")-1))
-		newstt="$(sed "s/^$newnum) \(.*\)/-->\1/" "$stl" | sed 's/^[0-9]\+) \(.*\)/* \1/')"
-		echo "s$newnum" > "$ctlf"
-		$notify -t 2000 "Switching station" "$newstt"
+	if [[ -n $(pidof pianobar) ]]; then
+		stcnt=$(wc -l < "$stl")
+		if [[ "$stcnt" -ge 2 ]]; then
+			curnum=$(currentstation)
+			[[ "$curnum" -lt 0 ]] && exit
+			[[ "$curnum" -lt 0 ]] && newnum=$((stcnt-1)) || newnum=$((curnum-1))
+			switchstation "$newnum"
+		fi
 	fi;;
     
 switchstation|ss)
-	if [[ -n `pidof pianobar` ]]; then
-		text="$(grep --text "[0-9]\+)" "$logf" | sed 's/.*\t\(.*)\) *\(Q \+\)\?\([^ ].*\)/\1 \3/')""\n \n Type a number."
-		newnum="$($zenity --entry --title="Switch Station" --text="$(cat "$stl")\n Pick a number.")"
-		if [[ -n "$newnum" ]]; then
-			newstt="$(sed "s/^$newnum) \(.*\)/-->\1/" "$stl" | sed 's/^[0-9]\+) \(.*\)/* \1/')"
-			echo "s$newnum" > "$ctlf"
-			$notify -t 2000 "Switching station" "$newstt"
-		fi
+	if [[ -n $(pidof pianobar) ]]; then
+		text="$(grep --text "[0-9]\+)" "$logf" | sed 's/.*\t\(.*)\) *\(Q \+\)\?\([^ ].*\)/\1 \3/')"
+		newnum="$($zenity --entry --title="Switch Station" --entry-text="$(currentstation)" --text="$(cat "$stl")\n Pick a number.")"
+		switchstation "$newnum"
 	fi;;
 	
 
 switchstationlist|ssl)
-	if [[ -n `pidof pianobar` ]]; then
-		text="$(grep --text "[0-9]\+)" "$logf" | sed 's/.*\t\(.*)\) *\(Q \+\)\?\([^ ].*\)/\1 \3/')""\n \n Type a number."
-		newnum="$(echo "$(cat "$stl")" | $zenity --list --column="Station" --title="Switch Station" --text="Pick a number." | awk -F')' '{print $1}')"
-		if [[ -n "$newnum" ]]; then
-			newstt="$(sed "s/^$newnum) \(.*\)/-->\1/" "$stl" | sed 's/^[0-9]\+) \(.*\)/* \1/')"
-			echo "s$newnum" > "$ctlf"
-			$notify -t 2000 "Switching station" "$newstt"
-		fi
+	if [[ -n $(pidof pianobar) ]]; then
+		text="$(grep --text "[0-9]\+)" "$logf" | sed 's/.*\t\(.*)\) *\(Q \+\)\?\([^ ].*\)/\1 \3/')"
+		newnum="$($zenity --list --column="Station" --title="Switch Station" --text="Pick a station." < "$stl" | awk -F')' '{print $1}')"
+		switchstation "$newnum"
 	fi;;
-    
+
+choosestationlist|csl)
+	if [[ -n $(pidof pianobar) ]]; then
+		text="$(grep --text "[0-9]\+)" "$logf" | sed 's/.*\t\(.*)\) *\(Q \+\)\?\([^ ].*\)/\1 \3/')"
+		newnum="$($zenity --list --column="Station" --title="Select Station" --text="Pick a station." < "$stl" | awk -F')' '{print $1}')"
+		choosestation "$newnum"
+	fi;;
+
 upcoming|queue|u)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "u" > "$ctlf"
 		sleep .5
 		list="$(grep --text '[0-9])' $logf | sed 's/.*\t [0-9])/*/; s/&/\&amp;/; s/</\&lt;/')"
@@ -218,7 +257,7 @@ upcoming|queue|u)
 	fi;;    
 
 "history"|h)
-	if [[ -n `pidof pianobar` ]]; then
+	if [[ -n $(pidof pianobar) ]]; then
 		echo -n "h" > "$ctlf"
 		text="$(grep --text "[0-9]\+)" "$logf" | sed 's/.*\t\(.*) *[^ ].*\)/\1/')""\n \n Type a number."
 		snum="$($zenity --entry --title="History" --text="$text")"
