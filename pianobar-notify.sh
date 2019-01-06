@@ -85,15 +85,15 @@ playpause="||"
 [[ -f $ip && "$(cat "$ip")" == 1 ]] && playpause="|>"
 icon=$(echo "$artist-$album.jpg" | sed 's/\//_/g')
 songPlayed="$((songDuration-songPlayed))"
-dursec="$((songDuration-$((songDuration/60*60))))"
-plasec="$((songPlayed-$((songPlayed/60*60))))"
+dursec="$((songDuration-(songDuration/60*60)))"
+plasec="$((songPlayed-(songPlayed/60*60)))"
 
 if [[ $dursec -lt 10 ]]; then
     duration="$((songDuration/60)):"0$dursec
 else
     duration="$((songDuration/60)):"$dursec
 fi
-sed 's/\//_/g'
+
 if [[ $plasec -lt 10 ]]; then
     played="$((songPlayed/60)):"0$plasec
 else
